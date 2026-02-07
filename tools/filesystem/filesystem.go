@@ -536,38 +536,25 @@ func (s *System) CreateThumb(originalKey string, thumbKey, thumbSize string) err
 		}
 	}
 
-	originalContentType := r.ContentType()
-
 	opts := &blob.WriterOptions{
-		ContentType: originalContentType,
-	}
-
-	var format imaging.Format
-
-	switch originalContentType {
-	case "image/jpeg":
-		format = imaging.JPEG
-	case "image/gif":
-		format = imaging.GIF
-	case "image/tiff":
-		format = imaging.TIFF
-	case "image/bmp":
-		format = imaging.BMP
-	default:
-		// fallback to PNG (this includes webp!)
-		opts.ContentType = "image/png"
-		format = imaging.PNG
+		ContentType: r.ContentType(),
 	}
 
 	// open a thumb storage writer (aka. prepare for upload)
-	w, err := s.bucket.NewWriter(s.ctx, thumbKey, opts)
+	w, writerErr := s.bucket.NewWriter(s.ctx, thumbKey, opts)
+	if writerErr != nil {
+		return writerErr
+	}
+
+	// try to detect the thumb format based on the original file name
+	// (fallbacks to png on error)
+	format, err := imaging.FormatFromFilename(thumbKey)
 	if err != nil {
-		return err
+		format = imaging.PNG
 	}
 
 	// thumb encode (aka. upload)
-	err = imaging.Encode(w, thumbImg, format)
-	if err != nil {
+	if err := imaging.Encode(w, thumbImg, format); err != nil {
 		w.Close()
 		return err
 	}

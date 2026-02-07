@@ -14,9 +14,17 @@ import (
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 	"github.com/pocketbase/pocketbase/tools/hook"
 	"github.com/pocketbase/pocketbase/tools/osutils"
-)
 
+	appHooks "github.com/pocketbase/pocketbase/examples/base/hooks"
+)
 func main() {
+	// Start CLIP service before PocketBase
+	log.Println("Starting CLIP service...")
+	if err := core.StartCLIPService(); err != nil {
+		log.Printf("Warning: Failed to start CLIP service: %v", err)
+		// Continue anyway - PocketBase will work without CLIP
+	}
+
 	app := pocketbase.New()
 
 	// ---------------------------------------------------------------
@@ -93,6 +101,10 @@ func main() {
 		HooksPoolSize: hooksPool,
 	})
 
+	// Register custom app hooks (media pipeline, etc.)
+	appHooks.RegisterMediaHooks(app)
+	appHooks.RegisterFeedHooks(app)
+
 	// migrate command (with js templates)
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{
 		TemplateLang: migratecmd.TemplateLangJS,
@@ -103,7 +115,7 @@ func main() {
 	// GitHub selfupdate
 	ghupdate.MustRegister(app, app.RootCmd, ghupdate.Config{})
 
-	// static route to serves files from the provided public dir
+	// Static route to serve files from the provided public dir
 	// (if publicDir exists and the route path is not already defined)
 	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
 		Func: func(e *core.ServeEvent) error {
@@ -114,6 +126,15 @@ func main() {
 			return e.Next()
 		},
 		Priority: 999, // execute as latest as possible to allow users to provide their own route
+	})
+
+	// Add cleanup on app shutdown
+	app.OnTerminate().Bind(&hook.Handler[*core.TerminateEvent]{
+		Func: func(e *core.TerminateEvent) error {
+			core.StopCLIPService()
+			return e.Next()
+		},
+		Priority: 999,
 	})
 
 	if err := app.Start(); err != nil {

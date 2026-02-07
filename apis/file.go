@@ -23,7 +23,7 @@ var imageContentTypes = []string{"image/png", "image/jpg", "image/jpeg", "image/
 var defaultThumbSizes = []string{"100x100"}
 
 // bindFileApi registers the file api endpoints and the corresponding handlers.
-func bindFileApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
+func bindFileApi(_ core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	maxWorkers := cast.ToInt64(os.Getenv("PB_THUMBS_MAX_WORKERS"))
 	if maxWorkers <= 0 {
 		maxWorkers = int64(runtime.NumCPU() + 2) // the value is arbitrary chosen and may change in the future

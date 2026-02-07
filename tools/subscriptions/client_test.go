@@ -3,7 +3,6 @@ package subscriptions_test
 import (
 	"encoding/json"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -209,16 +208,12 @@ func TestDiscard(t *testing.T) {
 }
 
 func TestSend(t *testing.T) {
-	var mu sync.Mutex
-
 	c := subscriptions.NewDefaultClient()
 
 	received := []string{}
 	go func() {
 		for m := range c.Channel() {
-			mu.Lock()
 			received = append(received, m.Name)
-			mu.Unlock()
 		}
 	}()
 
@@ -231,8 +226,6 @@ func TestSend(t *testing.T) {
 
 	expected := []string{"m1", "m2"}
 
-	mu.Lock()
-	defer mu.Unlock()
 	if len(received) != len(expected) {
 		t.Fatalf("Expected %d messages, got %d", len(expected), len(received))
 	}

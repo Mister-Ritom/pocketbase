@@ -1,9 +1,7 @@
 package search
 
 import (
-	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/ganigeorgiev/fexpr"
@@ -48,7 +46,7 @@ var TokenFunctions = map[string]func(
 		latB := resolvedArgs[3].Identifier
 
 		return &ResolverResult{
-			NullFallback: NullFallbackDisabled,
+			NoCoalesce: true,
 			Identifier: `(6371 * acos(` +
 				`cos(radians(` + latA + `)) * cos(radians(` + latB + `)) * ` +
 				`cos(radians(` + lonB + `) - radians(` + lonA + `)) + ` +
@@ -58,138 +56,576 @@ var TokenFunctions = map[string]func(
 		}, nil
 	},
 
-	// strftime(format, [timeValue, modifier1, modifier2, ...]) returns
-	// a date string formatted according to the specified format argument.
-	//
-	// It is similar to the builtin SQLite strftime function (https://sqlite.org/lang_datefunc.html)
-	// with the main difference that NULL results will be normalized for
-	// consistency with the non-nullable PocketBase "text" and "date" fields.
-	//
-	// The function accepts 1, 2 or 3+ arguments.
-	//
-	// (1) The first (format) argument must be always a formatting string
-	// with valid substitutions as listed in https://sqlite.org/lang_datefunc.html.
-	//
-	// (2) The second (time-value) argument is optional and must be either a date string, number or collection field identifier
-	// that matches one of the formats listed in https://sqlite.org/lang_datefunc.html#time_values.
-	//
-	// (3+) The remaining (modifiers) optional arguments are expected to be
-	// string literals matching the listed modifiers in https://sqlite.org/lang_datefunc.html#modifiers.
-	//
-	// A multi-match constraint will be also applied in case the time-value
-	// is an identifier as a result of a multi-value relation field.
-	"strftime": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
-		totalArgs := len(args)
-
-		if totalArgs < 1 {
-			return nil, fmt.Errorf("[strftime] expected at least 1 arguments, got %d", len(args))
+	// contains(field, value) - checks if field contains value (for arrays) or substring (for strings)
+	"contains": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("[contains] expected 2 arguments, got %d", len(args))
 		}
 
-		// limit the number of arguments to prevent abuse
-		if totalArgs > 10 {
-			return nil, fmt.Errorf("[strftime] too many arguments (max allowed 10, got %d)", totalArgs)
-		}
-
-		// format arg
-		// -----------------------------------------------------------
-		if args[0].Type != fexpr.TokenText {
-			return nil, errors.New("[strftime] expects the first argument to be a format string")
-		}
-
-		formatArgResult, err := argTokenResolverFunc(args[0])
+		field, err := argTokenResolverFunc(args[0])
 		if err != nil {
-			return nil, fmt.Errorf("[strftime] failed to resolve format argument: %w", err)
+			return nil, fmt.Errorf("[contains] failed to resolve field: %w", err)
 		}
 
-		// no further arguments
-		if totalArgs == 1 {
-			formatArgResult.NullFallback = NullFallbackEnforced
-			formatArgResult.Identifier = "strftime(" + formatArgResult.Identifier + ")"
-			return formatArgResult, nil
-		}
-
-		// time-value arg
-		// -----------------------------------------------------------
-		allowedTimeValueTokens := []fexpr.TokenType{fexpr.TokenText, fexpr.TokenIdentifier, fexpr.TokenNumber}
-		if !slices.Contains(allowedTimeValueTokens, args[1].Type) {
-			return nil, errors.New("[strftime] expects the second argument to be of a valid time-value type")
-		}
-
-		timeValueArgResult, err := argTokenResolverFunc(args[1])
+		value, err := argTokenResolverFunc(args[1])
 		if err != nil {
-			return nil, fmt.Errorf("[strftime] failed to resolve time-value argument: %w", err)
+			return nil, fmt.Errorf("[contains] failed to resolve value: %w", err)
 		}
 
-		// modifiers args
-		// -----------------------------------------------------------
-		resolvedModifierArgs := make([]*ResolverResult, totalArgs-2)
-		for i, arg := range args[2:] {
-			if arg.Type != fexpr.TokenText {
-				return nil, fmt.Errorf("[strftime] invalid modifier argument %d - can be only string", i)
-			}
+		return &ResolverResult{
+			NoCoalesce: true,
+			Identifier: "CONTAINS_PLACEHOLDER",
+			Params:     mergeParams(field.Params, value.Params),
+			AfterBuild: func(expr dbx.Expression) dbx.Expression {
+				return &containsExpr{field: field, value: value}
+			},
+		}, nil
+	},
 
-			resolved, err := argTokenResolverFunc(arg)
+	// containsAny(field, values...) - checks if field contains any of the values
+	"containsAny": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("[containsAny] expected at least 2 arguments, got %d", len(args))
+		}
+
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[containsAny] failed to resolve field: %w", err)
+		}
+
+		values := make([]*ResolverResult, len(args)-1)
+		for i, arg := range args[1:] {
+			value, err := argTokenResolverFunc(arg)
 			if err != nil {
-				return nil, fmt.Errorf("[strftime] failed to resolve modifier argument %d: %w", i, err)
+				return nil, fmt.Errorf("[containsAny] failed to resolve value %d: %w", i, err)
 			}
-
-			resolvedModifierArgs[i] = resolved
+			values[i] = value
 		}
 
-		// generating new ResolverResult
-		// -----------------------------------------------------------
-		result := &ResolverResult{
-			NullFallback: NullFallbackEnforced,
-			Params:       dbx.Params{},
+		return &ResolverResult{
+			NoCoalesce: true,
+			Identifier: "CONTAINS_ANY_EXPR",
+			Params:     mergeParams(append([]dbx.Params{field.Params}, collectParams(values)...)...),
+			AfterBuild: func(expr dbx.Expression) dbx.Expression {
+				return &containsAnyExpr{field: field, values: values}
+			},
+		}, nil
+	},
+
+	// containsAll(field, values...) - checks if field contains all of the values
+	"containsAll": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("[containsAll] expected at least 2 arguments, got %d", len(args))
 		}
 
-		identifiers := make([]string, 0, totalArgs)
-
-		identifiers = append(identifiers, formatArgResult.Identifier)
-		if err = concatUniqueParams(result.Params, formatArgResult.Params); err != nil {
-			return nil, err
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[containsAll] failed to resolve field: %w", err)
 		}
 
-		identifiers = append(identifiers, timeValueArgResult.Identifier)
-		if err = concatUniqueParams(result.Params, timeValueArgResult.Params); err != nil {
-			return nil, err
-		}
-
-		for _, m := range resolvedModifierArgs {
-			identifiers = append(identifiers, m.Identifier)
-			err = concatUniqueParams(result.Params, m.Params)
+		values := make([]*ResolverResult, len(args)-1)
+		for i, arg := range args[1:] {
+			value, err := argTokenResolverFunc(arg)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("[containsAll] failed to resolve value %d: %w", i, err)
 			}
+			values[i] = value
 		}
 
-		result.Identifier = "strftime(" + strings.Join(identifiers, ",") + ")"
+		return &ResolverResult{
+			NoCoalesce: true,
+			Identifier: "CONTAINS_ALL_EXPR",
+			Params:     mergeParams(append([]dbx.Params{field.Params}, collectParams(values)...)...),
+			AfterBuild: func(expr dbx.Expression) dbx.Expression {
+				return &containsAllExpr{field: field, values: values}
+			},
+		}, nil
+	},
 
-		if timeValueArgResult.MultiMatchSubQuery != nil {
-			// replace the regular time-value identifier with the multi-match one
-			identifiers[1] = timeValueArgResult.MultiMatchSubQuery.ValueIdentifier
-			result.MultiMatchSubQuery = timeValueArgResult.MultiMatchSubQuery
-			result.MultiMatchSubQuery.ValueIdentifier = "strftime(" + strings.Join(identifiers, ",") + ")"
-
-			err = concatUniqueParams(result.MultiMatchSubQuery.Params, result.Params)
-			if err != nil {
-				return nil, err
-			}
+	// notContains(field, value) - checks if field does not contain value
+	"notContains": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("[notContains] expected 2 arguments, got %d", len(args))
 		}
 
-		return result, nil
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[notContains] failed to resolve field: %w", err)
+		}
+
+		value, err := argTokenResolverFunc(args[1])
+		if err != nil {
+			return nil, fmt.Errorf("[notContains] failed to resolve value: %w", err)
+		}
+
+		return &ResolverResult{
+			NoCoalesce: true,
+			Identifier: fmt.Sprintf("NOT_CONTAINS_EXPR(%s, %s)", field.Identifier, value.Identifier),
+			Params:     mergeParams(field.Params, value.Params),
+			AfterBuild: func(expr dbx.Expression) dbx.Expression {
+				return &notContainsExpr{field: field, value: value}
+			},
+		}, nil
+	},
+
+	// startsWith(field, prefix) - checks if field starts with prefix
+	"startsWith": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("[startsWith] expected 2 arguments, got %d", len(args))
+		}
+
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[startsWith] failed to resolve field: %w", err)
+		}
+
+		prefix, err := argTokenResolverFunc(args[1])
+		if err != nil {
+			return nil, fmt.Errorf("[startsWith] failed to resolve prefix: %w", err)
+		}
+
+		return &ResolverResult{
+			Identifier: fmt.Sprintf("%s LIKE (%s || '%%')", field.Identifier, prefix.Identifier),
+			Params:     mergeParams(field.Params, prefix.Params),
+		}, nil
+	},
+
+	// endsWith(field, suffix) - checks if field ends with suffix
+	"endsWith": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("[endsWith] expected 2 arguments, got %d", len(args))
+		}
+
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[endsWith] failed to resolve field: %w", err)
+		}
+
+		suffix, err := argTokenResolverFunc(args[1])
+		if err != nil {
+			return nil, fmt.Errorf("[endsWith] failed to resolve suffix: %w", err)
+		}
+
+		return &ResolverResult{
+			Identifier: fmt.Sprintf("%s LIKE ('%%' || %s)", field.Identifier, suffix.Identifier),
+			Params:     mergeParams(field.Params, suffix.Params),
+		}, nil
+	},
+
+	// regex(field, pattern) - checks if field matches regex pattern
+	"regex": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("[regex] expected 2 arguments, got %d", len(args))
+		}
+
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[regex] failed to resolve field: %w", err)
+		}
+
+		pattern, err := argTokenResolverFunc(args[1])
+		if err != nil {
+			return nil, fmt.Errorf("[regex] failed to resolve pattern: %w", err)
+		}
+
+		return &ResolverResult{
+			NoCoalesce: true,
+			Identifier: "REGEX_EXPR",
+			Params:     mergeParams(field.Params, pattern.Params),
+			AfterBuild: func(expr dbx.Expression) dbx.Expression {
+				return &regexExpr{field: field, pattern: pattern}
+			},
+		}, nil
+	},
+
+	// lengthGt(field, length) - checks if field length is greater than specified length
+	"lengthGt": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("[lengthGt] expected 2 arguments, got %d", len(args))
+		}
+
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[lengthGt] failed to resolve field: %w", err)
+		}
+
+		length, err := argTokenResolverFunc(args[1])
+		if err != nil {
+			return nil, fmt.Errorf("[lengthGt] failed to resolve length: %w", err)
+		}
+
+		return &ResolverResult{
+			NoCoalesce: true,
+			Identifier: "LENGTH_GT_EXPR",
+			Params:     mergeParams(field.Params, length.Params),
+			AfterBuild: func(expr dbx.Expression) dbx.Expression {
+				return &lengthGtExpr{field: field, length: length}
+			},
+		}, nil
+	},
+
+	// lengthLt(field, length) - checks if field length is less than specified length
+	"lengthLt": func(argTokenResolverFunc func(fexpr.Token) (*ResolverResult, error), args ...fexpr.Token) (*ResolverResult, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("[lengthLt] expected 2 arguments, got %d", len(args))
+		}
+
+		field, err := argTokenResolverFunc(args[0])
+		if err != nil {
+			return nil, fmt.Errorf("[lengthLt] failed to resolve field: %w", err)
+		}
+
+		length, err := argTokenResolverFunc(args[1])
+		if err != nil {
+			return nil, fmt.Errorf("[lengthLt] failed to resolve length: %w", err)
+		}
+
+		return &ResolverResult{
+			NoCoalesce: true,
+			Identifier: "LENGTH_LT_EXPR",
+			Params:     mergeParams(field.Params, length.Params),
+			AfterBuild: func(expr dbx.Expression) dbx.Expression {
+				return &lengthLtExpr{field: field, length: length}
+			},
+		}, nil
 	},
 }
 
-func concatUniqueParams(destParams, newParams dbx.Params) error {
-	for k, v := range newParams {
-		found, ok := destParams[k]
-		if ok && v != found {
-			return fmt.Errorf("conflicting param key %s", k)
-		}
-
-		destParams[k] = v
+// collectParams collects all Params from a slice of ResolverResult
+func collectParams(results []*ResolverResult) []dbx.Params {
+	params := make([]dbx.Params, len(results))
+	for i, result := range results {
+		params[i] = result.Params
 	}
+	return params
+}
 
-	return nil
+// -------------------------------------------------------------------
+// Custom expressions for database-specific operations
+// -------------------------------------------------------------------
+
+var _ dbx.Expression = (*containsExpr)(nil)
+
+type containsExpr struct {
+	field *ResolverResult
+	value *ResolverResult
+}
+
+func (e *containsExpr) Build(db *dbx.DB, params dbx.Params) string {
+	driver := db.DriverName()
+
+	switch driver {
+	case "sqlite", "sqlite3":
+		// For SQLite: EXISTS (SELECT 1 FROM json_each(field) WHERE value = ?)
+		return fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+			e.field.Identifier,
+			e.value.Identifier,
+		)
+	case "postgres":
+		// For PostgreSQL: field @> '[value]'
+		return fmt.Sprintf(
+			"%s @> %s",
+			e.field.Identifier,
+			"("+e.value.Identifier+")",
+		)
+	case "mysql":
+		// For MySQL: JSON_CONTAINS(field, JSON_QUOTE(?))
+		return fmt.Sprintf(
+			"JSON_CONTAINS(%s, JSON_QUOTE(%s))",
+			e.field.Identifier,
+			e.value.Identifier,
+		)
+	default:
+		// Fallback - assume SQLite
+		return fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+			e.field.Identifier,
+			e.value.Identifier,
+		)
+	}
+}
+
+var _ dbx.Expression = (*containsAnyExpr)(nil)
+
+type containsAnyExpr struct {
+	field  *ResolverResult
+	values []*ResolverResult
+}
+
+func (e *containsAnyExpr) Build(db *dbx.DB, params dbx.Params) string {
+	driver := db.DriverName()
+
+	switch driver {
+	case "sqlite", "sqlite3":
+		// For SQLite: multiple OR EXISTS
+		conditions := make([]string, len(e.values))
+		for i, value := range e.values {
+			conditions[i] = fmt.Sprintf(
+				"EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+				e.field.Identifier,
+				value.Identifier,
+			)
+		}
+		return "(" + strings.Join(conditions, " OR ") + ")"
+	case "postgres":
+		// For PostgreSQL: field ?| array[...]
+		identifiers := make([]string, len(e.values))
+		for i, value := range e.values {
+			identifiers[i] = value.Identifier
+		}
+		return fmt.Sprintf(
+			"%s ?| array[%s]",
+			e.field.Identifier,
+			strings.Join(identifiers, ", "),
+		)
+	case "mysql":
+		// For MySQL: OR of JSON_CONTAINS
+		conditions := make([]string, len(e.values))
+		for i, value := range e.values {
+			conditions[i] = fmt.Sprintf(
+				"JSON_CONTAINS(%s, JSON_QUOTE(%s))",
+				e.field.Identifier,
+				value.Identifier,
+			)
+		}
+		return "(" + strings.Join(conditions, " OR ") + ")"
+	default:
+		// Fallback - assume SQLite
+		conditions := make([]string, len(e.values))
+		for i, value := range e.values {
+			conditions[i] = fmt.Sprintf(
+				"EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+				e.field.Identifier,
+				value.Identifier,
+			)
+		}
+		return "(" + strings.Join(conditions, " OR ") + ")"
+	}
+}
+
+var _ dbx.Expression = (*containsAllExpr)(nil)
+
+type containsAllExpr struct {
+	field  *ResolverResult
+	values []*ResolverResult
+}
+
+func (e *containsAllExpr) Build(db *dbx.DB, params dbx.Params) string {
+	driver := db.DriverName()
+
+	switch driver {
+	case "sqlite", "sqlite3":
+		// For SQLite: multiple AND EXISTS
+		conditions := make([]string, len(e.values))
+		for i, value := range e.values {
+			conditions[i] = fmt.Sprintf(
+				"EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+				e.field.Identifier,
+				value.Identifier,
+			)
+		}
+		return "(" + strings.Join(conditions, " AND ") + ")"
+	case "postgres":
+		// For PostgreSQL: field ?& array[...]
+		identifiers := make([]string, len(e.values))
+		for i, value := range e.values {
+			identifiers[i] = value.Identifier
+		}
+		return fmt.Sprintf(
+			"%s ?& array[%s]",
+			e.field.Identifier,
+			strings.Join(identifiers, ", "),
+		)
+	case "mysql":
+		// For MySQL: AND of JSON_CONTAINS
+		conditions := make([]string, len(e.values))
+		for i, value := range e.values {
+			conditions[i] = fmt.Sprintf(
+				"JSON_CONTAINS(%s, JSON_QUOTE(%s))",
+				e.field.Identifier,
+				value.Identifier,
+			)
+		}
+		return "(" + strings.Join(conditions, " AND ") + ")"
+	default:
+		// Fallback - assume SQLite
+		conditions := make([]string, len(e.values))
+		for i, value := range e.values {
+			conditions[i] = fmt.Sprintf(
+				"EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+				e.field.Identifier,
+				value.Identifier,
+			)
+		}
+		return "(" + strings.Join(conditions, " AND ") + ")"
+	}
+}
+
+var _ dbx.Expression = (*notContainsExpr)(nil)
+
+type notContainsExpr struct {
+	field *ResolverResult
+	value *ResolverResult
+}
+
+func (e *notContainsExpr) Build(db *dbx.DB, params dbx.Params) string {
+	driver := db.DriverName()
+
+	switch driver {
+	case "sqlite", "sqlite3":
+		// For SQLite: NOT EXISTS (...)
+		return fmt.Sprintf(
+			"NOT EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+			e.field.Identifier,
+			e.value.Identifier,
+		)
+	case "postgres":
+		// For PostgreSQL: NOT (field @> '[value]')
+		return fmt.Sprintf(
+			"NOT (%s @> %s)",
+			e.field.Identifier,
+			"("+e.value.Identifier+")",
+		)
+	case "mysql":
+		// For MySQL: NOT JSON_CONTAINS(...)
+		return fmt.Sprintf(
+			"NOT JSON_CONTAINS(%s, JSON_QUOTE(%s))",
+			e.field.Identifier,
+			e.value.Identifier,
+		)
+	default:
+		// Fallback - assume SQLite
+		return fmt.Sprintf(
+			"NOT EXISTS (SELECT 1 FROM json_each(%s) WHERE value = %s)",
+			e.field.Identifier,
+			e.value.Identifier,
+		)
+	}
+}
+
+var _ dbx.Expression = (*regexExpr)(nil)
+
+type regexExpr struct {
+	field   *ResolverResult
+	pattern *ResolverResult
+}
+
+func (e *regexExpr) Build(db *dbx.DB, params dbx.Params) string {
+	driver := db.DriverName()
+
+	switch driver {
+	case "sqlite", "sqlite3":
+		// For SQLite: use REGEXP operator (requires sqlite3 with regexp extension)
+		return fmt.Sprintf(
+			"%s REGEXP %s",
+			e.field.Identifier,
+			e.pattern.Identifier,
+		)
+	case "postgres":
+		// For PostgreSQL: ~ operator
+		return fmt.Sprintf(
+			"%s ~ %s",
+			e.field.Identifier,
+			e.pattern.Identifier,
+		)
+	case "mysql":
+		// For MySQL: REGEXP operator
+		return fmt.Sprintf(
+			"%s REGEXP %s",
+			e.field.Identifier,
+			e.pattern.Identifier,
+		)
+	default:
+		// Fallback - use LIKE for simple patterns (not a full regex)
+		return fmt.Sprintf(
+			"%s LIKE %s",
+			e.field.Identifier,
+			e.pattern.Identifier,
+		)
+	}
+}
+
+var _ dbx.Expression = (*lengthGtExpr)(nil)
+
+type lengthGtExpr struct {
+	field  *ResolverResult
+	length *ResolverResult
+}
+
+func (e *lengthGtExpr) Build(db *dbx.DB, params dbx.Params) string {
+	driver := db.DriverName()
+
+	switch driver {
+	case "sqlite", "sqlite3":
+		// For SQLite: json_array_length(field) > ?
+		return fmt.Sprintf(
+			"json_array_length(%s) > %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	case "postgres":
+		// For PostgreSQL: jsonb_array_length(field) > ?
+		return fmt.Sprintf(
+			"jsonb_array_length(%s) > %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	case "mysql":
+		// For MySQL: JSON_LENGTH(field) > ?
+		return fmt.Sprintf(
+			"JSON_LENGTH(%s) > %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	default:
+		// Fallback - assume SQLite
+		return fmt.Sprintf(
+			"json_array_length(%s) > %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	}
+}
+
+var _ dbx.Expression = (*lengthLtExpr)(nil)
+
+type lengthLtExpr struct {
+	field  *ResolverResult
+	length *ResolverResult
+}
+
+func (e *lengthLtExpr) Build(db *dbx.DB, params dbx.Params) string {
+	driver := db.DriverName()
+
+	switch driver {
+	case "sqlite", "sqlite3":
+		// For SQLite: json_array_length(field) < ?
+		return fmt.Sprintf(
+			"json_array_length(%s) < %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	case "postgres":
+		// For PostgreSQL: jsonb_array_length(field) < ?
+		return fmt.Sprintf(
+			"jsonb_array_length(%s) < %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	case "mysql":
+		// For MySQL: JSON_LENGTH(field) < ?
+		return fmt.Sprintf(
+			"JSON_LENGTH(%s) < %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	default:
+		// Fallback - assume SQLite
+		return fmt.Sprintf(
+			"json_array_length(%s) < %s",
+			e.field.Identifier,
+			e.length.Identifier,
+		)
+	}
 }

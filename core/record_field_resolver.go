@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/tools/inflector"
 	"github.com/pocketbase/pocketbase/tools/search"
 	"github.com/pocketbase/pocketbase/tools/security"
 	"github.com/pocketbase/pocketbase/tools/types"
@@ -48,7 +47,7 @@ type RecordFieldResolver struct {
 	requestInfo       *RequestInfo
 	staticRequestInfo map[string]any
 	allowedFields     []string
-	joins             []*search.Join
+	joins             []*join
 	allowHiddenFields bool
 	// ---
 	listRuleJoins       map[string]*Collection // tableAlias->collection
@@ -88,7 +87,7 @@ func NewRecordFieldResolver(
 		baseCollection:    baseCollection,
 		requestInfo:       requestInfo,
 		allowHiddenFields: allowHiddenFields, // note: it is not based only on the requestInfo.auth since it could be used by a non-request internal method
-		joins:             []*search.Join{},
+		joins:             []*join{},
 		allowedFields: []string{
 			`^\w+[\w\.\:]*$`,
 			`^\@request\.context$`,
@@ -129,12 +128,12 @@ func NewRecordFieldResolver(
 // resolved fields (eg. dynamically joining relations).
 func (r *RecordFieldResolver) UpdateQuery(query *dbx.SelectQuery) error {
 	if len(r.joins) > 0 {
-		r.updateQueryWithDeduplicateConstraint(query)
+		query.Distinct(true)
 
 		for _, join := range r.joins {
 			query.LeftJoin(
-				(join.TableName + " " + join.TableAlias),
-				join.On,
+				(join.tableName + " " + join.tableAlias),
+				join.on,
 			)
 		}
 	}
@@ -158,11 +157,11 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 	}
 
 	cloneR := *r
-	cloneR.joins = []*search.Join{}
+	cloneR.joins = []*join{}
 	cloneR.baseCollection = c
 	cloneR.baseCollectionAlias = tableAlias
 	cloneR.allowHiddenFields = true
-	cloneR.joinAliasSuffix = security.PseudorandomString(8)
+	cloneR.joinAliasSuffix = security.PseudorandomString(6)
 
 	expr, err := search.FilterData(*c.ListRule).BuildExpr(&cloneR)
 	if err != nil {
@@ -172,90 +171,17 @@ func (r *RecordFieldResolver) updateQueryWithCollectionListRule(c *Collection, t
 	query.AndWhere(expr)
 
 	if len(cloneR.joins) > 0 {
-		r.updateQueryWithDeduplicateConstraint(query)
+		query.Distinct(true)
 
 		for _, j := range cloneR.joins {
 			query.LeftJoin(
-				(j.TableName + " " + j.TableAlias),
-				j.On,
+				(j.tableName + " " + j.tableAlias),
+				j.on,
 			)
 		}
 	}
 
 	return nil
-}
-
-func (r *RecordFieldResolver) updateQueryWithDeduplicateConstraint(query *dbx.SelectQuery) {
-	query.Distinct(true)
-
-	// @todo Reasearch better options for generic rows deduplication.
-	//
-	// Disable the GROUP BY conditional checks for now since it prevents
-	// proper utilization of ORDER BY indexes (and maybe others)
-	// (https://github.com/pocketbase/pocketbase/discussions/7461)
-
-	// info := query.Info()
-	// if info.Distinct {
-	// 	return
-	// }
-
-	// // already has the group by registered
-	// var groupByCol = r.baseCollection.Name
-	// if r.baseCollectionAlias != "" {
-	// 	groupByCol = r.baseCollectionAlias
-	// }
-	// groupByCol += ".id"
-	// if len(info.GroupBy) > 0 && info.GroupBy[0] == groupByCol {
-	// 	return
-	// }
-
-	// // when deemed safe (GROUP BY could have different execution order compared to DISTINCT),
-	// // prefer GROUP BY to deduplicate only on the id field instead of all columns
-	// // so that the size of a single row wouldn't matter that much
-	// if preferGroupBy(info, groupByCol) {
-	// 	query.GroupBy(groupByCol)
-	// } else {
-	// 	query.Distinct(true)
-	// }
-}
-
-func preferGroupBy(info *dbx.QueryInfo, fullUnquotedGroupByCol string) bool {
-	if len(info.GroupBy) != 0 {
-		return false
-	}
-
-	if info.Having != nil {
-		return false
-	}
-
-	// dbx fallbacks to * if not set
-	if len(info.Selects) == 0 {
-		return true
-	}
-
-	if len(info.Selects) != 1 {
-		return false
-	}
-
-	identifier := info.Selects[0]
-
-	if identifier == "*" || identifier == fullUnquotedGroupByCol {
-		return true
-	}
-
-	// try again as direct col match in an unquoted column format
-	identifier = inflector.Columnify(identifier)
-	if identifier == fullUnquotedGroupByCol {
-		return true
-	}
-
-	// remains table.* to check
-	// (aliased columns for now are ignored as they could be represented by expressions)
-	if !strings.HasSuffix(identifier, ".*") {
-		return false
-	}
-
-	return strings.HasPrefix(fullUnquotedGroupByCol, strings.TrimSuffix(identifier, "*"))
 }
 
 // Resolve implements `search.FieldResolver` interface.
@@ -351,7 +277,7 @@ func (r *RecordFieldResolver) resolveStaticRequestField(path ...string) (*search
 		return &search.ResolverResult{Identifier: "NULL"}, nil
 	}
 
-	placeholder := "f" + security.PseudorandomString(10)
+	placeholder := "f" + security.PseudorandomString(8)
 
 	// @todo consider deprecating with the introduction of filter functions
 	if modifier == lowerModifier {
@@ -376,10 +302,10 @@ func (r *RecordFieldResolver) loadCollection(collectionNameOrId string) (*Collec
 }
 
 func (r *RecordFieldResolver) registerJoin(tableName string, tableAlias string, on dbx.Expression) error {
-	newJoin := &search.Join{
-		TableName:  tableName,
-		TableAlias: tableAlias,
-		On:         on,
+	newJoin := &join{
+		tableName:  tableName,
+		tableAlias: tableAlias,
+		on:         on,
 	}
 
 	// (see updateQueryWithCollectionListRule)
@@ -396,13 +322,13 @@ func (r *RecordFieldResolver) registerJoin(tableName string, tableAlias string, 
 			if r.listRuleJoins == nil {
 				r.listRuleJoins = map[string]*Collection{}
 			}
-			r.listRuleJoins[newJoin.TableAlias] = c
+			r.listRuleJoins[newJoin.tableAlias] = c
 		}
 	}
 
 	// replace existing join
 	for i, j := range r.joins {
-		if j.TableAlias == newJoin.TableAlias {
+		if j.tableAlias == newJoin.tableAlias {
 			r.joins[i] = newJoin
 			return nil
 		}

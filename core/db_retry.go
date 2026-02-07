@@ -19,8 +19,8 @@ const defaultMaxLockRetries = 12
 
 func execLockRetry(timeout time.Duration, maxRetries int) dbx.ExecHookFunc {
 	return func(q *dbx.Query, op func() error) error {
-		if q.Context() == nil {
-			cancelCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	if q.Context() == nil {
+		cancelCtx, cancel := context.WithTimeout(context.TODO(), timeout)
 			defer func() {
 				cancel()
 				//nolint:staticcheck

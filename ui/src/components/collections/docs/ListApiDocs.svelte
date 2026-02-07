@@ -212,6 +212,20 @@
         </tr>
         <FieldsQueryParam />
         <tr>
+            <td>search</td>
+            <td>
+                <span class="label">String</span>
+            </td>
+            <td>
+                Perform a full-text search on records with searchable text fields. <br />
+                The search is performed using the database's full-text search capabilities and supports natural language queries.
+                <br />
+                Only text fields marked as "searchable" in the collection schema will be included in the search index.
+                <br />
+                Example: <CodeBlock content={`?search=lorem ipsum`} />
+            </td>
+        </tr>
+        <tr>
             <td id="query-page">skipTotal</td>
             <td>
                 <span class="label">Boolean</span>

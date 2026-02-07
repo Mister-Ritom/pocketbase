@@ -371,6 +371,27 @@ type App interface {
 
 	// ---------------------------------------------------------------
 
+	// FileQuery returns a new File select query.
+	FileQuery() *dbx.SelectQuery
+
+	// FindFileById finds a single File entry by its id.
+	FindFileById(id string) (*File, error)
+
+	// FindFiles returns all File models matching the provided filter (if any).
+	//
+	// Returns all files if no filter is provided.
+	FindFiles(exprs ...dbx.Expression) ([]*File, error)
+
+	// CountFiles returns the total number of files.
+	CountFiles(exprs ...dbx.Expression) (int64, error)
+
+	// ---------------------------------------------------------------
+
+	// VectorIndex returns the app vector index instance.
+	VectorIndex() *VectorIndex
+
+	// ---------------------------------------------------------------
+
 	// CollectionQuery returns a new Collection select query.
 	CollectionQuery() *dbx.SelectQuery
 

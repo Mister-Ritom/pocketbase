@@ -459,6 +459,34 @@ func (app *BaseApp) registerRecordHooks() {
 		Priority: -99,
 	})
 
+	// FTS synchronization hooks
+	app.OnRecordAfterCreateSuccess().Bind(&hook.Handler[*RecordEvent]{
+		Id: "__pbFTSSync__",
+		Func: func(e *RecordEvent) error {
+			ftsManager := NewFTSManager(e.App)
+			return ftsManager.UpdateRecordFTS(e.Record.Collection(), e.Record)
+		},
+		Priority: 99, // execute after all other hooks
+	})
+
+	app.OnRecordAfterUpdateSuccess().Bind(&hook.Handler[*RecordEvent]{
+		Id: "__pbFTSSync__",
+		Func: func(e *RecordEvent) error {
+			ftsManager := NewFTSManager(e.App)
+			return ftsManager.UpdateRecordFTS(e.Record.Collection(), e.Record)
+		},
+		Priority: 99, // execute after all other hooks
+	})
+
+	app.OnRecordAfterDeleteSuccess().Bind(&hook.Handler[*RecordEvent]{
+		Id: "__pbFTSSync__",
+		Func: func(e *RecordEvent) error {
+			ftsManager := NewFTSManager(e.App)
+			return ftsManager.DeleteRecordFTS(e.Record.Collection(), e.Record.Id)
+		},
+		Priority: 99, // execute after all other hooks
+	})
+
 	app.OnRecordAfterDeleteError().Bind(&hook.Handler[*RecordErrorEvent]{
 		Id: systemHookIdRecord,
 		Func: func(e *RecordErrorEvent) error {

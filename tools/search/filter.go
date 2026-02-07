@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -44,6 +45,46 @@ func (f FilterData) BuildExpr(
 	return f.BuildExprWithLimit(fieldResolver, DefaultFilterExprLimit, placeholderReplacements...)
 }
 
+// preprocessFilterOperators converts new operators to function calls for compatibility
+func preprocessFilterOperators(raw string) string {
+	// Define operators that should be converted to function calls
+	operators := []struct {
+		name string
+	}{
+		{"contains"},
+		{"containsAny"},
+		{"containsAll"},
+		{"notContains"},
+		{"startsWith"},
+		{"endsWith"},
+		{"regex"},
+		{"lengthGt"},
+		{"lengthLt"},
+	}
+
+	for _, op := range operators {
+		// Use regex to match "field operator value" and convert to "operator(field, value)"
+		// This is a simplified approach - in practice, we'd need more sophisticated parsing
+		// to handle nested expressions, quotes, etc.
+		pattern := `(\w+)\s+` + op.name + `\s+(.+)`
+		re := regexp.MustCompile(pattern)
+		raw = re.ReplaceAllStringFunc(raw, func(match string) string {
+			parts := strings.SplitN(match, " "+op.name+" ", 2)
+			if len(parts) == 2 {
+				field := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				// Remove trailing operators if present
+				value = strings.TrimSuffix(value, " ||")
+				value = strings.TrimSuffix(value, " &&")
+				return op.name + "(" + field + ", " + value + ")"
+			}
+			return match
+		})
+	}
+
+	return raw
+}
+
 // BuildExpr parses the current filter data and returns a new db WHERE expression.
 //
 // The filter string can also contain dbx placeholder parameters (eg. "title = {:name}"),
@@ -54,6 +95,9 @@ func (f FilterData) BuildExprWithLimit(
 	placeholderReplacements ...dbx.Params,
 ) (dbx.Expression, error) {
 	raw := string(f)
+
+	// preprocess new operators to function calls
+	raw = preprocessFilterOperators(raw)
 
 	// replace the placeholder params in the raw string filter
 	for _, p := range placeholderReplacements {
@@ -153,6 +197,20 @@ func buildParsedFilterExpr(data []fexpr.ExprGroup, fieldResolver FieldResolver, 
 }
 
 func resolveTokenizedExpr(expr fexpr.Expr, fieldResolver FieldResolver) (dbx.Expression, error) {
+	// Handle single operand expressions (like function calls)
+	if expr.Op == "" {
+		lResult, lErr := resolveToken(expr.Left, fieldResolver)
+		if lErr != nil || lResult.Identifier == "" {
+			return nil, fmt.Errorf("invalid operand %q - %v", expr.Left.Literal, lErr)
+		}
+
+		result := dbx.NewExp(lResult.Identifier, lResult.Params)
+		if lResult.AfterBuild != nil {
+			result = lResult.AfterBuild(result)
+		}
+		return result, nil
+	}
+
 	lResult, lErr := resolveToken(expr.Left, fieldResolver)
 	if lErr != nil || lResult.Identifier == "" {
 		return nil, fmt.Errorf("invalid left operand %q - %v", expr.Left.Literal, lErr)
@@ -218,7 +276,7 @@ func buildResolversExpr(
 			expr = dbx.Enclose(dbx.And(expr, mm))
 		} else if left.MultiMatchSubQuery != nil {
 			mm := &manyVsOneExpr{
-				nullFallback: left.NullFallback,
+				noCoalesce:   left.NoCoalesce,
 				subQuery:     left.MultiMatchSubQuery,
 				op:           op,
 				otherOperand: right,
@@ -227,7 +285,7 @@ func buildResolversExpr(
 			expr = dbx.Enclose(dbx.And(expr, mm))
 		} else if right.MultiMatchSubQuery != nil {
 			mm := &manyVsOneExpr{
-				nullFallback: right.NullFallback,
+				noCoalesce:   right.NoCoalesce,
 				subQuery:     right.MultiMatchSubQuery,
 				op:           op,
 				otherOperand: left,
@@ -326,6 +384,9 @@ func resolveToken(token fexpr.Token, fieldResolver FieldResolver) (*ResolverResu
 // `COALESCE(a, "") = ""` since the direct match can be accomplished
 // with a seek while the COALESCE will induce a table scan.
 func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
+	isLeftEmpty := isEmptyIdentifier(left) || (len(left.Params) == 1 && hasEmptyParamValue(left))
+	isRightEmpty := isEmptyIdentifier(right) || (len(right.Params) == 1 && hasEmptyParamValue(right))
+
 	equalOp := "="
 	nullEqualOp := "IS"
 	concatOp := "OR"
@@ -340,22 +401,15 @@ func resolveEqualExpr(equal bool, left, right *ResolverResult) dbx.Expression {
 		nullExpr = "IS NOT NULL"
 	}
 
-	// no coalesce fallback (eg. compare to a json field)
+	// no coalesce (eg. compare to a json field)
 	// a IS b
 	// a IS NOT b
-	if left.NullFallback == NullFallbackDisabled ||
-		right.NullFallback == NullFallbackDisabled {
+	if left.NoCoalesce || right.NoCoalesce {
 		return dbx.NewExp(
 			fmt.Sprintf("%s %s %s", left.Identifier, nullEqualOp, right.Identifier),
 			mergeParams(left.Params, right.Params),
 		)
 	}
-
-	isLeftEmpty := isEmptyIdentifier(left) ||
-		(left.NullFallback == NullFallbackAuto && len(left.Params) == 1 && hasEmptyParamValue(left))
-
-	isRightEmpty := isEmptyIdentifier(right) ||
-		(right.NullFallback == NullFallbackAuto && len(right.Params) == 1 && hasEmptyParamValue(right))
 
 	// both operands are empty
 	if isLeftEmpty && isRightEmpty {
@@ -425,10 +479,6 @@ func hasEmptyParamValue(result *ResolverResult) bool {
 }
 
 func isKnownNonEmptyIdentifier(result *ResolverResult) bool {
-	if result.NullFallback == NullFallbackEnforced {
-		return false
-	}
-
 	switch strings.ToLower(result.Identifier) {
 	case "1", "0", "false", `true`:
 		return true
@@ -639,13 +689,13 @@ func (e *manyVsManyExpr) Build(db *dbx.DB, params dbx.Params) string {
 
 	whereExpr, buildErr := buildResolversExpr(
 		&ResolverResult{
-			NullFallback: e.left.NullFallback,
-			Identifier:   "[[" + lAlias + ".multiMatchValue]]",
+			NoCoalesce: e.left.NoCoalesce,
+			Identifier: "[[" + lAlias + ".multiMatchValue]]",
 		},
 		e.op,
 		&ResolverResult{
-			NullFallback: e.right.NullFallback,
-			Identifier:   "[[" + rAlias + ".multiMatchValue]]",
+			NoCoalesce: e.right.NoCoalesce,
+			Identifier: "[[" + rAlias + ".multiMatchValue]]",
 			// note: the AfterBuild needs to be handled only once and it
 			// doesn't matter whether it is applied on the left or right subquery operand
 			AfterBuild: dbx.Not, // inverse for the not-exist expression
@@ -680,7 +730,7 @@ type manyVsOneExpr struct {
 	subQuery     dbx.Expression
 	op           fexpr.SignOp
 	inverse      bool
-	nullFallback NullFallbackPreference
+	noCoalesce   bool
 }
 
 // Build converts the expression into a SQL fragment.
@@ -694,9 +744,9 @@ func (e *manyVsOneExpr) Build(db *dbx.DB, params dbx.Params) string {
 	alias := "__sm" + security.PseudorandomString(8)
 
 	r1 := &ResolverResult{
-		NullFallback: e.nullFallback,
-		Identifier:   "[[" + alias + ".multiMatchValue]]",
-		AfterBuild:   dbx.Not, // inverse for the not-exist expression
+		NoCoalesce: e.noCoalesce,
+		Identifier: "[[" + alias + ".multiMatchValue]]",
+		AfterBuild: dbx.Not, // inverse for the not-exist expression
 	}
 
 	r2 := &ResolverResult{

@@ -12,7 +12,7 @@ import (
 )
 
 // bindCronApi registers the crons api endpoint.
-func bindCronApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
+func bindCronApi(_ core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	subGroup := rg.Group("/crons").Bind(RequireSuperuserAuth())
 	subGroup.GET("", cronsList)
 	subGroup.POST("/{id}", cronRun)

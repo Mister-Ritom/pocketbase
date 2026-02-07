@@ -889,6 +889,24 @@ func onCollectionSaveExecute(e *CollectionEvent) error {
 			}
 		}
 
+		// sync FTS indexes
+		if !isView {
+			ftsManager := NewFTSManager(txApp)
+
+			// Drop old FTS indexes if fields changed
+			if oldCollection != nil && collectionSearchableFieldsChanged(oldCollection, e.Collection) {
+				if err := ftsManager.DropCollectionFTS(oldCollection); err != nil {
+					txApp.Logger().Warn("Failed to drop old FTS indexes", "collection", oldCollection.Name, "error", err)
+				}
+			}
+
+			// Create new FTS indexes
+			if err := ftsManager.CreateCollectionFTS(e.Collection); err != nil {
+				txApp.Logger().Warn("Failed to create FTS indexes", "collection", e.Collection.Name, "error", err)
+				// Don't fail the collection save if FTS creation fails - it's not critical
+			}
+		}
+
 		return nil
 	})
 	e.App = originalApp
@@ -1070,4 +1088,35 @@ func (c *Collection) fieldIndexName(field string) string {
 	}
 
 	return name
+}
+
+// collectionSearchableFieldsChanged checks if the searchable fields have changed between two collections.
+func collectionSearchableFieldsChanged(oldCollection, newCollection *Collection) bool {
+	oldFields := make(map[string]bool)
+	for _, field := range oldCollection.Fields {
+		if textField, ok := field.(*TextField); ok && textField.Searchable {
+			oldFields[textField.Id] = true
+		}
+	}
+
+	newFields := make(map[string]bool)
+	for _, field := range newCollection.Fields {
+		if textField, ok := field.(*TextField); ok && textField.Searchable {
+			newFields[textField.Id] = true
+		}
+	}
+
+	// Check if any field was added or removed from searchable
+	for id := range oldFields {
+		if !newFields[id] {
+			return true
+		}
+	}
+	for id := range newFields {
+		if !oldFields[id] {
+			return true
+		}
+	}
+
+	return false
 }

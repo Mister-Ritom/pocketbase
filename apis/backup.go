@@ -14,7 +14,7 @@ import (
 )
 
 // bindBackupApi registers the file api endpoints and the corresponding handlers.
-func bindBackupApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
+func bindBackupApi(_ core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	sub := rg.Group("/backups")
 	sub.GET("", backupsList).Bind(RequireSuperuserAuth())
 	sub.POST("", backupCreate).Bind(RequireSuperuserAuth())

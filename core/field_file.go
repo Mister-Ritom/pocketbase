@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gabriel-vasile/mimetype"
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/pocketbase/pocketbase/core/validators"
 	"github.com/pocketbase/pocketbase/tools/filesystem"
@@ -417,6 +418,33 @@ func (f *FileField) afterRecordExecuteSuccess(ctx context.Context, app App, reco
 		if file, ok := v.(*filesystem.File); ok {
 			uploaded = append(uploaded, file)
 			newValue[i] = file.Name
+
+			// Create standalone File record
+			fileRecord := &File{
+				OriginalName:   file.OriginalName,
+				StoredName:     file.Name,
+				Mime:           "", // Will be detected by filesystem during upload
+				Size:           file.Size,
+				StoragePath:    record.BaseFilesPath() + "/" + file.Name,
+				StorageAdapter: "local", // Assuming local for now
+				Protected:      f.Protected,
+			}
+
+			// Try to detect MIME type
+			if reader, err := file.Reader.Open(); err == nil {
+				defer reader.Close()
+				if mt, err := mimetype.DetectReader(reader); err == nil {
+					fileRecord.Mime = mt.String()
+				}
+			}
+
+			// Add reference to the record field
+			fileRecord.AddReference(record.Collection().Name, record.Id, f.Name)
+
+			// Save the File record (ignore errors for now to not break existing functionality)
+			if err := app.Save(fileRecord); err != nil {
+				app.Logger().Warn("Failed to create standalone file record", "error", err, "filename", file.Name)
+			}
 		}
 	}
 	f.setValue(record, newValue)

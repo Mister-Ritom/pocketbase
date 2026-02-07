@@ -22,7 +22,7 @@ import (
 	"github.com/spf13/cast"
 )
 
-func bindBatchApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
+func bindBatchApi(_ core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	sub := rg.Group("/batch")
 	sub.POST("", batchTransaction).Unbind(DefaultBodyLimitMiddlewareId) // the body limit is inlined
 }

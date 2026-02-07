@@ -119,6 +119,48 @@
                         wildcard match)
                     </span>
                 </li>
+
+                <!-- Array Operators -->
+                <li>
+                    <code class="filter-op">{"contains"}</code>
+                    <span class="txt">Array/string contains value</span>
+                </li>
+                <li>
+                    <code class="filter-op">{"containsAny"}</code>
+                    <span class="txt">Array contains any of the values</span>
+                </li>
+                <li>
+                    <code class="filter-op">{"containsAll"}</code>
+                    <span class="txt">Array contains all of the values</span>
+                </li>
+                <li>
+                    <code class="filter-op">{"notContains"}</code>
+                    <span class="txt">Array/string does not contain value</span>
+                </li>
+
+                <!-- Text Operators -->
+                <li>
+                    <code class="filter-op">{"startsWith"}</code>
+                    <span class="txt">String starts with prefix</span>
+                </li>
+                <li>
+                    <code class="filter-op">{"endsWith"}</code>
+                    <span class="txt">String ends with suffix</span>
+                </li>
+                <li>
+                    <code class="filter-op">{"regex"}</code>
+                    <span class="txt">String matches regex pattern</span>
+                </li>
+
+                <!-- Length Operators -->
+                <li>
+                    <code class="filter-op">{"lengthGt"}</code>
+                    <span class="txt">Array/string length greater than</span>
+                </li>
+                <li>
+                    <code class="filter-op">{"lengthLt"}</code>
+                    <span class="txt">Array/string length less than</span>
+                </li>
             </ul>
         </li>
     </ul>

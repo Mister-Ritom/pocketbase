@@ -67,6 +67,10 @@
     async function init(settings = {}) {
         formSettings = {
             s3: settings?.s3 || {},
+            fileStorage: {
+                maxUploadSize: settings?.fileStorage?.maxUploadSize ?? 33554432,
+                ...settings?.fileStorage,
+            },
         };
 
         originalFormSettings = JSON.parse(JSON.stringify(formSettings));
@@ -99,6 +103,38 @@
             {#if isLoading}
                 <div class="loader" />
             {:else}
+                <!-- File Storage Settings -->
+                <div class="form-field">
+                    <div class="form-field-toggle">
+                        <div class="form-field-toggle-label">
+                            <div class="txt txt-bold m-b-xs">File Upload Limits</div>
+                            <div class="txt-hint">
+                                Configure maximum file upload size for standalone files.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-field-content">
+                        <div class="form-field">
+                            <label class="form-label" for="maxUploadSize">
+                                <span class="txt">Maximum upload size (bytes)</span>
+                                <span class="txt-hint">
+                                    Default: 33554432 (32MB). Set to 0 to disable file uploads.
+                                </span>
+                            </label>
+                            <input
+                                id="maxUploadSize"
+                                type="number"
+                                class="form-input"
+                                placeholder="33554432"
+                                min="0"
+                                bind:value={formSettings.fileStorage.maxUploadSize}
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="clearfix m-b-base" />
+
                 <S3Fields
                     toggleLabel="Use S3 storage"
                     originalConfig={originalFormSettings.s3}

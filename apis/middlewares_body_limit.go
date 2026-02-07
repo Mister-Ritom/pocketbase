@@ -72,6 +72,31 @@ func dynamicCollectionBodyLimit(collectionPathParam string) *hook.Handler[*core.
 	}
 }
 
+func dynamicFileUploadBodyLimit() *hook.Handler[*core.RequestEvent] {
+	return &hook.Handler[*core.RequestEvent]{
+		Id:       DefaultBodyLimitMiddlewareId,
+		Priority: DefaultBodyLimitMiddlewarePriority,
+		Func: func(e *core.RequestEvent) error {
+			// Use file storage max upload size setting
+			limitBytes := e.App.Settings().FileStorage.MaxUploadSize
+			if limitBytes < 0 {
+				limitBytes = DefaultMaxBodySize // fallback to default
+			}
+			// If limit is 0, disable uploads (though this should be caught in API)
+			if limitBytes == 0 {
+				limitBytes = 1 // minimum to allow request but API will reject
+			}
+
+			err := applyBodyLimit(e, limitBytes)
+			if err != nil {
+				return err
+			}
+
+			return e.Next()
+		},
+	}
+}
+
 func applyBodyLimit(e *core.RequestEvent, limitBytes int64) error {
 	// no limit
 	if limitBytes <= 0 {

@@ -79,6 +79,7 @@ type BaseApp struct {
 	settings            *Settings
 	subscriptionsBroker *subscriptions.Broker
 	logger              *slog.Logger
+	vectorIndex         *VectorIndex
 	concurrentDB        dbx.Builder
 	nonconcurrentDB     dbx.Builder
 	auxConcurrentDB     dbx.Builder
@@ -426,6 +427,12 @@ func (app *BaseApp) Bootstrap() error {
 			return err
 		}
 
+		// init vector index
+		app.vectorIndex = NewVectorIndex(app.DataDir())
+		if err := app.vectorIndex.Load(); err != nil {
+			return err
+		}
+
 		// try to cleanup the pb_data temp directory (if any)
 		_ = os.RemoveAll(filepath.Join(app.DataDir(), LocalTempDirName))
 
@@ -612,6 +619,11 @@ func (app *BaseApp) Cron() *cron.Cron {
 // SubscriptionsBroker returns the app realtime subscriptions broker instance.
 func (app *BaseApp) SubscriptionsBroker() *subscriptions.Broker {
 	return app.subscriptionsBroker
+}
+
+// VectorIndex returns the app vector index instance.
+func (app *BaseApp) VectorIndex() *VectorIndex {
+	return app.vectorIndex
 }
 
 // NewMailClient creates and returns a new SMTP or Sendmail client

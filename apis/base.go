@@ -43,6 +43,8 @@ func NewRouter(app core.App) (*router.Router[*core.RequestEvent], error) {
 	bindBackupApi(app, apiGroup)
 	bindCronApi(app, apiGroup)
 	bindFileApi(app, apiGroup)
+	bindFilesApi(app, apiGroup)
+	bindVectorsApi(app, apiGroup)
 	bindBatchApi(app, apiGroup)
 	bindRealtimeApi(app, apiGroup)
 	bindHealthApi(app, apiGroup)

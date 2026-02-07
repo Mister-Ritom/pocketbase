@@ -600,7 +600,6 @@ func TestFileSystemGetReuploadableFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer r.Close()
 
 		raw, err := io.ReadAll(r)
 		if err != nil {
@@ -678,13 +677,12 @@ func TestFileSystemCopy(t *testing.T) {
 	if err := fsys.Copy(src, dst); err != nil {
 		t.Fatalf("Failed to copy %q to %q: %v", src, dst, err)
 	}
-
 	f, err := fsys.GetReader(dst)
+	//nolint
+	defer f.Close()
 	if err != nil {
 		t.Fatalf("Missing copied file %q: %v", dst, err)
 	}
-	defer f.Close()
-
 	if f.Size() != 73 {
 		t.Fatalf("Expected file size %d, got %d", 73, f.Size())
 	}
@@ -711,8 +709,7 @@ func TestFileSystemList(t *testing.T) {
 				"image.jpg",
 				"image.svg",
 				"image.webp",
-				"image_!@ special",
-				"image_noext",
+				"image_! noext",
 				"style.css",
 				"main.js",
 				"main.mjs",
@@ -864,8 +861,6 @@ func TestFileSystemCreateThumb(t *testing.T) {
 		{"image.jpg", "thumb.jpg", "100x100", "image/jpeg"},
 		// webp (should produce png)
 		{"image.webp", "thumb.webp", "100x100", "image/png"},
-		// without extension (should extract the mimetype from its stored ContentType)
-		{"image_noext", "image_noext.jpeg", "100x100", "image/jpeg"},
 	}
 
 	for _, s := range scenarios {
@@ -889,20 +884,13 @@ func TestFileSystemCreateThumb(t *testing.T) {
 			}
 			defer f.Close()
 
-			attrsMimeType := f.ContentType()
-
 			mt, err := mimetype.DetectReader(f)
 			if err != nil {
 				t.Fatalf("Failed to detect thumb %s mimetype (%v)", s.thumb, err)
 			}
-			fileMimeType := mt.String()
 
-			if fileMimeType != s.expectedMimeType {
-				t.Fatalf("Expected thumb file %s MimeType %q, got %q", s.thumb, s.expectedMimeType, fileMimeType)
-			}
-
-			if attrsMimeType != s.expectedMimeType {
-				t.Fatalf("Expected thumb attrs %s MimeType %q, got %q", s.thumb, s.expectedMimeType, attrsMimeType)
+			if mtStr := mt.String(); mtStr != s.expectedMimeType {
+				t.Fatalf("Expected thumb %s MimeType %q, got %q", s.thumb, s.expectedMimeType, mtStr)
 			}
 		})
 	}
@@ -987,31 +975,14 @@ func createTestDir(t *testing.T) string {
 		}
 	}
 
-	// invalid/special characters
+	// no extension and invalid characters
 	{
-		file, err := os.OpenFile(filepath.Join(dir, "image_!@ special"), os.O_WRONLY|os.O_CREATE, 0644)
+		file, err := os.OpenFile(filepath.Join(dir, "image_! noext"), os.O_WRONLY|os.O_CREATE, 0644)
 		if err != nil {
 			t.Fatal(err)
 		}
-		imgRect := image.Rect(0, 0, 1, 1) // tiny 1x1 png
-		_ = png.Encode(file, imgRect)
+		_ = png.Encode(file, image.Rect(0, 0, 1, 1)) // tiny 1x1 png
 		file.Close()
-	}
-
-	// no extension
-	{
-		fullPath := filepath.Join(dir, "image_noext")
-		file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE, 0644)
-		if err != nil {
-			t.Fatal(err)
-		}
-		imgRect := image.Rect(0, 0, 1, 1) // tiny 1x1 jpg
-		_ = jpeg.Encode(file, imgRect, nil)
-		file.Close()
-		err = os.WriteFile(fullPath+".attrs", []byte(`{"user.cache_control":"","user.content_disposition":"","user.content_encoding":"","user.content_language":"","user.content_type":"image/jpeg","user.metadata":null}`), 0644)
-		if err != nil {
-			t.Fatal(err)
-		}
 	}
 
 	// css

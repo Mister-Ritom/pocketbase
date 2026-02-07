@@ -14,7 +14,7 @@ import (
 )
 
 func TestFilterDataBuildExpr(t *testing.T) {
-	resolver := search.NewSimpleFieldResolver("test1", "test2", "test3", `^test4_\w+$`, `^test5\.[\w\.\:]*\w+$`)
+	resolver := search.NewSimpleFieldResolver("test1", "test2", "test3", `^test4_\w+$`, `^test5\.[\w\.\:]*\w+$`, "tags", "title", "email")
 
 	scenarios := []struct {
 		name          string
@@ -144,6 +144,30 @@ func TestFilterDataBuildExpr(t *testing.T) {
 			"geoDistance(1,2,3,4) < 567",
 			false,
 			"(6371 * acos(cos(radians({:TEST})) * cos(radians({:TEST})) * cos(radians({:TEST}) - radians({:TEST})) + sin(radians({:TEST})) * sin(radians({:TEST})))) < {:TEST}",
+		},
+		{
+			"contains function",
+			"contains(tags, \"flutter\")",
+			false,
+			"EXISTS \\(SELECT 1 FROM json_each\\(\\[\\[tags\\]\\]\\) WHERE value = \\{:TEST\\}\\)",
+		},
+		{
+			"startsWith function",
+			"startsWith(title, \"Hello\")",
+			false,
+			"\\[\\[title\\]\\] LIKE \\({:TEST} \\|\\| '%'\\)",
+		},
+		{
+			"endsWith function",
+			"endsWith(email, \"@gmail.com\")",
+			false,
+			"\\[\\[email\\]\\] LIKE \\('%' \\|\\| {:TEST}\\)",
+		},
+		{
+			"lengthGt function",
+			"lengthGt(tags, 2)",
+			false,
+			"json_array_length\\(\\[\\[tags\\]\\]\\) > {:TEST}",
 		},
 	}
 

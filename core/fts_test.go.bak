@@ -1,0 +1,50 @@
+package core
+
+import (
+	"testing"
+
+	"github.com/pocketbase/pocketbase/tests"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestFTSManager_CheckSupport(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	ftsManager := NewFTSManager(app)
+	support := ftsManager.CheckSupport()
+
+	// SQLite should be supported
+	assert.True(t, support.Supported, "SQLite should support FTS")
+	assert.NotEmpty(t, support.Version, "Version should be set")
+}
+
+func TestFTSManager_GetSearchableFields(t *testing.T) {
+	app, _ := tests.NewTestApp()
+	defer app.Cleanup()
+
+	collection := &Collection{}
+	collection.Name = "test"
+	collection.Fields = NewFieldsList(
+		&TextField{Name: "title", Searchable: true},
+		&TextField{Name: "content", Searchable: false},
+		&TextField{Name: "description", Searchable: true},
+	)
+
+	ftsManager := NewFTSManager(app)
+	searchableFields := ftsManager.getSearchableFields(collection)
+
+	assert.Len(t, searchableFields, 2, "Should find 2 searchable fields")
+	assert.Equal(t, "title", searchableFields[0].Name)
+	assert.Equal(t, "description", searchableFields[1].Name)
+}
+
+func TestTextField_Searchable(t *testing.T) {
+	field := &TextField{
+		Name:       "test",
+		Searchable: true,
+	}
+
+	assert.Equal(t, FieldTypeText, field.Type())
+	assert.True(t, field.Searchable)
+}

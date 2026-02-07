@@ -13,7 +13,7 @@ import (
 )
 
 // bindCollectionApi registers the collection api endpoints and the corresponding handlers.
-func bindCollectionApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
+func bindCollectionApi(_ core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 	subGroup := rg.Group("/collections").Bind(RequireSuperuserAuth())
 	subGroup.GET("", collectionsList)
 	subGroup.POST("", collectionCreate)

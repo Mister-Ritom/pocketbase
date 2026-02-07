@@ -128,6 +128,7 @@ type settings struct {
 	TrustedProxy TrustedProxyConfig `form:"trustedProxy" json:"trustedProxy"`
 	Batch        BatchConfig        `form:"batch" json:"batch"`
 	Logs         LogsConfig         `form:"logs" json:"logs"`
+	FileStorage  FileStorageConfig  `form:"fileStorage" json:"fileStorage"`
 }
 
 // Settings defines the PocketBase app settings.
@@ -287,6 +288,7 @@ func (s *Settings) PostValidate(ctx context.Context, app App) error {
 		validation.Field(&s.Batch),
 		validation.Field(&s.RateLimits),
 		validation.Field(&s.TrustedProxy),
+		validation.Field(&s.FileStorage),
 	)
 }
 
@@ -423,7 +425,7 @@ type BatchConfig struct {
 	// MaxRequests is the maximum allowed batch request to execute.
 	MaxRequests int `form:"maxRequests" json:"maxRequests"`
 
-	// Timeout is the max duration in seconds to wait before cancelling the batch transaction.
+	// Timeout is the the max duration in seconds to wait before cancelling the batch transaction.
 	Timeout int64 `form:"timeout" json:"timeout"`
 
 	// MaxBodySize is the maximum allowed batch request body size in bytes.
@@ -449,7 +451,7 @@ type BackupsConfig struct {
 	// Leave it empty to disable the auto backups functionality.
 	Cron string `form:"cron" json:"cron"`
 
-	// CronMaxKeep is the max number of cron generated backups to
+	// CronMaxKeep is the the max number of cron generated backups to
 	// keep before removing older entries.
 	//
 	// This field works only when the cron config has valid cron expression.
@@ -551,6 +553,20 @@ func (c TrustedProxyConfig) MarshalJSON() ([]byte, error) {
 // Validate makes RateLimitRule validatable by implementing [validation.Validatable] interface.
 func (c TrustedProxyConfig) Validate() error {
 	return nil
+}
+
+type FileStorageConfig struct {
+	// MaxUploadSize is the maximum allowed file upload size in bytes.
+	//
+	// If not set, fallbacks to 32MB.
+	MaxUploadSize int64 `form:"maxUploadSize" json:"maxUploadSize"`
+}
+
+// Validate makes FileStorageConfig validatable by implementing [validation.Validatable] interface.
+func (c FileStorageConfig) Validate() error {
+	return validation.ValidateStruct(&c,
+		validation.Field(&c.MaxUploadSize, validation.Min(0)),
+	)
 }
 
 // -------------------------------------------------------------------

@@ -107,6 +107,11 @@ type TextField struct {
 	//
 	// A single collection can have only 1 field marked as primary key.
 	PrimaryKey bool `form:"primaryKey" json:"primaryKey"`
+
+	// Searchable will mark the field as full-text searchable.
+	//
+	// Only text fields can be marked as searchable.
+	Searchable bool `form:"searchable" json:"searchable"`
 }
 
 // Type implements [Field.Type] interface method.

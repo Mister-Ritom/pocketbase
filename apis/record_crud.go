@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,14 @@ func recordsList(e *core.RequestEvent) error {
 	err = checkForSuperuserOnlyRuleFields(requestInfo)
 	if err != nil {
 		return err
+	}
+
+	// Check if this is a full-text search request
+	urlQuery := e.Request.URL.Query()
+	searchQuery := urlQuery.Get("search")
+
+	if searchQuery != "" {
+		return recordsSearch(e, collection, requestInfo, searchQuery, urlQuery)
 	}
 
 	query := e.App.RecordQuery(collection)
@@ -724,6 +733,119 @@ func extractUploadedFiles(re *core.RequestEvent, collection *core.Collection, pr
 	}
 
 	return result, nil
+}
+
+// recordsSearch performs a full-text search on the collection records.
+func recordsSearch(e *core.RequestEvent, collection *core.Collection, requestInfo *core.RequestInfo, searchQuery string, urlQuery map[string][]string) error {
+	// Parse pagination parameters
+	page := 1
+	perPage := 30
+
+	if pageStr := urlQuery["page"]; len(pageStr) > 0 && pageStr[0] != "" {
+		if p, err := strconv.Atoi(pageStr[0]); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	if perPageStr := urlQuery["perPage"]; len(perPageStr) > 0 && perPageStr[0] != "" {
+		if pp, err := strconv.Atoi(perPageStr[0]); err == nil && pp > 0 && pp <= 1000 {
+			perPage = pp
+		}
+	}
+
+	// Calculate offset
+	offset := (page - 1) * perPage
+
+	// Perform FTS search
+	ftsManager := core.NewFTSManager(e.App)
+	searchRecords, err := ftsManager.SearchRecords(collection, searchQuery, perPage, offset)
+	if err != nil {
+		return firstApiError(err, e.BadRequestError("Search failed", err))
+	}
+
+	// Apply collection rules filtering if needed
+	var filteredRecords []*core.Record
+	fieldsResolver := core.NewRecordFieldResolver(e.App, collection, requestInfo, true)
+
+	if !requestInfo.HasSuperuserAuth() && collection.ListRule != nil && *collection.ListRule != "" {
+		// Filter records based on list rule
+		for _, record := range searchRecords {
+			// Create a dummy query to test the rule
+			dummyQuery := e.App.DB().Select("(1)").From(collection.Name).Where(dbx.HashExp{"id": record.Id})
+
+			resolver := core.NewRecordFieldResolver(e.App, collection, requestInfo, true)
+			expr, err := search.FilterData(*collection.ListRule).BuildExpr(resolver)
+			if err != nil {
+				continue // skip records that can't be evaluated
+			}
+			dummyQuery.AndWhere(expr)
+
+			var exists int
+			if err := dummyQuery.Limit(1).Row(&exists); err == nil && exists > 0 {
+				filteredRecords = append(filteredRecords, record)
+			}
+		}
+	} else {
+		filteredRecords = searchRecords
+	}
+
+	// Apply additional filters if present
+	var filterStr string
+	if filterValues := urlQuery["filter"]; len(filterValues) > 0 && filterValues[0] != "" {
+		filterStr = filterValues[0]
+	}
+	if filterStr != "" && len(filteredRecords) > 0 {
+		filterData := search.FilterData(filterStr)
+		var finalRecords []*core.Record
+
+		for _, record := range filteredRecords {
+			// Test each record against the filter
+			dummyQuery := e.App.DB().Select("(1)").From(collection.Name).Where(dbx.HashExp{"id": record.Id})
+
+			expr, err := filterData.BuildExpr(fieldsResolver)
+			if err != nil {
+				continue // skip records that can't be evaluated
+			}
+			dummyQuery.AndWhere(expr)
+
+			var exists int
+			if err := dummyQuery.Limit(1).Row(&exists); err == nil && exists > 0 {
+				finalRecords = append(finalRecords, record)
+			}
+		}
+		filteredRecords = finalRecords
+	}
+
+	// Get total count for pagination (this is approximate since we can't efficiently count filtered FTS results)
+	totalCount := len(filteredRecords)
+	if totalCount > perPage {
+		totalCount = perPage // we don't know the actual total
+	}
+
+	// Create result structure similar to regular list
+	result := &search.Result{
+		Page:       page,
+		PerPage:    perPage,
+		TotalItems: totalCount,
+		TotalPages: (totalCount + perPage - 1) / perPage, // ceiling division
+		Items:      filteredRecords,
+	}
+
+	event := new(core.RecordsListRequestEvent)
+	event.RequestEvent = e
+	event.Collection = collection
+	event.Records = filteredRecords
+	event.Result = result
+
+	return e.App.OnRecordsListRequest().Trigger(event, func(e *core.RecordsListRequestEvent) error {
+		if err := EnrichRecords(e.RequestEvent, e.Records); err != nil {
+			return firstApiError(err, e.InternalServerError("Failed to enrich records", err))
+		}
+
+		return execAfterSuccessTx(true, e.App, func() error {
+			return e.JSON(http.StatusOK, e.Result)
+		})
+	})
 }
 
 // hasAuthManageAccess checks whether the client is allowed to have

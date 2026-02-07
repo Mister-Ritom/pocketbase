@@ -88,5 +88,20 @@
                 </Field>
             </div>
         </div>
+
+        <div class="grid grid-sm">
+            <div class="col-12">
+                <Field class="form-field form-field-toggle" name="fields.{key}.searchable" let:uniqueId>
+                    <input type="checkbox" id={uniqueId} bind:checked={field.searchable} />
+                    <label for={uniqueId}>
+                        <span class="txt">Full-text searchable</span>
+                        <i
+                            class="ri-information-line link-hint"
+                            use:tooltip={"Enable full-text search on this field for record queries."}
+                        />
+                    </label>
+                </Field>
+            </div>
+        </div>
     </svelte:fragment>
 </SchemaField>

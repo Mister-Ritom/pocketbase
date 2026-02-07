@@ -104,6 +104,26 @@
                     <i class="ri-database-2-line" />
                 </a>
                 <a
+                    href="/files"
+                    class="menu-item"
+                    aria-label="Files"
+                    use:link
+                    use:active={{ path: "/files/?.*", className: "current-route" }}
+                    use:tooltip={{ text: "Files", position: "right" }}
+                >
+                    <i class="ri-folder-line" />
+                </a>
+                <a
+                    href="/vectors"
+                    class="menu-item"
+                    aria-label="Vectors"
+                    use:link
+                    use:active={{ path: "/vectors/?.*", className: "current-route" }}
+                    use:tooltip={{ text: "Vectors", position: "right" }}
+                >
+                    <i class="ri-search-line" />
+                </a>
+                <a
                     href="/logs"
                     class="menu-item"
                     aria-label="Logs"
